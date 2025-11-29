@@ -1,0 +1,5 @@
+{
+  "name": "foundation wallah",
+  "description": "An intelligent study companion offering class-wise study materials, notes, and generated Previous Year Questions (PYQs) powered by Gemini.",
+  "requestFramePermissions": []
+}
