@@ -27,12 +27,26 @@ import {
   File,
   Upload,
   Lock,
-  Unlock
+  Unlock,
+  LayoutDashboard,
+  Eye
 } from 'lucide-react';
 
 // --- Components ---
 
-const Navbar = ({ onHome, isAdmin, onToggleAdmin }: { onHome: () => void, isAdmin: boolean, onToggleAdmin: () => void }) => (
+const Navbar = ({ 
+  onHome, 
+  isAdmin, 
+  onToggleAdmin, 
+  onDashboard, 
+  isDashboardActive 
+}: { 
+  onHome: () => void, 
+  isAdmin: boolean, 
+  onToggleAdmin: () => void,
+  onDashboard: () => void,
+  isDashboardActive: boolean
+}) => (
   <nav className="sticky top-0 z-50 bg-white border-b border-slate-200 shadow-sm">
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div className="flex justify-between h-16">
@@ -45,7 +59,24 @@ const Navbar = ({ onHome, isAdmin, onToggleAdmin }: { onHome: () => void, isAdmi
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <button className="text-slate-500 hover:text-indigo-600 hidden sm:block font-medium text-sm transition-colors">Resources</button>
+          <button 
+            onClick={onHome}
+            className={`hidden sm:block font-medium text-sm transition-colors ${!isDashboardActive ? 'text-indigo-600' : 'text-slate-500 hover:text-indigo-600'}`}
+          >
+            Study Material
+          </button>
+          
+          {isAdmin && (
+            <button 
+              onClick={onDashboard}
+              className={`flex items-center gap-1.5 font-medium text-sm transition-colors ${isDashboardActive ? 'text-indigo-600' : 'text-slate-500 hover:text-indigo-600'}`}
+            >
+              <LayoutDashboard size={16} /> Dashboard
+            </button>
+          )}
+
+          <div className="h-6 w-px bg-slate-200 mx-2 hidden sm:block"></div>
+
           <button 
             onClick={onToggleAdmin}
             className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 transition-all ${
@@ -124,6 +155,7 @@ const MOCK_RESOURCES: UploadedResource[] = [
 
 export default function App() {
   // Navigation State
+  const [viewMode, setViewMode] = useState<'browse' | 'dashboard'>('browse');
   const [selectedClass, setSelectedClass] = useState<string | null>(null);
   const [selectedSubject, setSelectedSubject] = useState<Subject | null>(null);
   const [selectedTopic, setSelectedTopic] = useState<Topic | null>(null);
@@ -163,12 +195,20 @@ export default function App() {
     localStorage.setItem('edugenius_resources', JSON.stringify(resources));
   }, [resources]);
 
+  // Effect to handle Admin Toggle off while in Dashboard
+  useEffect(() => {
+    if (!isAdmin && viewMode === 'dashboard') {
+      setViewMode('browse');
+    }
+  }, [isAdmin, viewMode]);
+
   // Navigation Helpers
   const resetToHome = () => {
     setSelectedClass(null);
     setSelectedSubject(null);
     setSelectedTopic(null);
     setTopicSearchQuery("");
+    setViewMode('browse');
     resetContentView();
   };
 
@@ -189,6 +229,31 @@ export default function App() {
     setGeneratedContent("");
     setActiveResource(null);
     setError(null);
+  };
+
+  // Helper to deep link to a resource from Dashboard
+  const navigateToResource = (resource: UploadedResource) => {
+    const clsData = CURRICULUM[resource.classLevel];
+    if (!clsData) return;
+
+    const subject = clsData.subjects.find(s => s.id === resource.subjectId);
+    if (!subject) return;
+
+    const topic = clsData.topics[subject.id]?.find(t => t.id === resource.topicId);
+    if (!topic) return;
+
+    // Set state
+    setSelectedClass(resource.classLevel);
+    setSelectedSubject(subject);
+    setSelectedTopic(topic);
+    
+    // Set Active Resource
+    setActiveResource(resource);
+    setActiveAiType(null);
+    setGeneratedContent("");
+    
+    // Change view
+    setViewMode('browse');
   };
 
   // Content Handlers
@@ -237,8 +302,8 @@ export default function App() {
     handleSelectResource(resource);
   };
 
-  const handleDeleteResource = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleDeleteResource = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     if (confirm("Are you sure you want to delete this resource?")) {
       setResources(prev => prev.filter(r => r.id !== id));
       if (activeResource?.id === id) {
@@ -268,7 +333,6 @@ export default function App() {
          try {
            const res = await fetch(activeResource.content);
            blob = await res.blob();
-           // Try to guess extension from existing base64 header or default to png
            const match = activeResource.content.match(/^data:image\/(\w+);base64,/);
            extension = match ? match[1] : 'png';
            mimeType = `image/${extension}`;
@@ -280,16 +344,13 @@ export default function App() {
          blob = new Blob([activeResource.content], { type: 'text/plain' });
          extension = 'url';
       } else {
-         // Markdown/Text for notes, pyq, etc.
          blob = new Blob([activeResource.content], { type: 'text/markdown' });
          extension = 'md';
       }
 
-      // Trigger download
       const url = window.URL.createObjectURL(blob!);
       const link = document.createElement('a');
       link.href = url;
-      // Sanitize title for filename
       const safeTitle = activeResource.title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
       link.download = `${safeTitle}.${extension}`;
       document.body.appendChild(link);
@@ -298,7 +359,6 @@ export default function App() {
       window.URL.revokeObjectURL(url);
 
     } else if (generatedContent && activeAiType) {
-      // Download generated content as Markdown
       const blob = new Blob([generatedContent], { type: 'text/markdown' });
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -320,6 +380,149 @@ export default function App() {
   );
 
   // --- Views ---
+
+  // Admin Dashboard View
+  const AdminDashboard = () => {
+    const [search, setSearch] = useState("");
+    const filteredResources = resources.filter(r => r.title.toLowerCase().includes(search.toLowerCase()));
+
+    // Stats
+    const stats = {
+      total: resources.length,
+      notes: resources.filter(r => r.category === 'notes').length,
+      pyq: resources.filter(r => r.category === 'pyq').length,
+      files: resources.filter(r => ['pdf', 'image'].includes(r.category)).length,
+    };
+
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+        <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-900">Admin Dashboard</h1>
+            <p className="text-slate-600 mt-1">Manage all study materials and uploaded content.</p>
+          </div>
+          <div className="relative">
+             <input 
+               type="text" 
+               placeholder="Search resources..." 
+               value={search}
+               onChange={(e) => setSearch(e.target.value)}
+               className="pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full md:w-64" 
+             />
+             <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+          </div>
+        </div>
+
+        {/* Stats Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+           <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+              <p className="text-xs text-slate-500 font-medium uppercase">Total Resources</p>
+              <p className="text-2xl font-bold text-slate-900 mt-1">{stats.total}</p>
+           </div>
+           <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+              <p className="text-xs text-slate-500 font-medium uppercase">Notes</p>
+              <p className="text-2xl font-bold text-indigo-600 mt-1">{stats.notes}</p>
+           </div>
+           <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+              <p className="text-xs text-slate-500 font-medium uppercase">PYQs</p>
+              <p className="text-2xl font-bold text-orange-500 mt-1">{stats.pyq}</p>
+           </div>
+           <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+              <p className="text-xs text-slate-500 font-medium uppercase">Files (PDF/Img)</p>
+              <p className="text-2xl font-bold text-blue-500 mt-1">{stats.files}</p>
+           </div>
+        </div>
+
+        {/* Resource Table */}
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+           <div className="overflow-x-auto">
+             <table className="w-full text-sm text-left">
+               <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
+                 <tr>
+                   <th className="px-6 py-4">Resource</th>
+                   <th className="px-6 py-4">Category</th>
+                   <th className="px-6 py-4">Context (Class / Subject / Topic)</th>
+                   <th className="px-6 py-4">Date</th>
+                   <th className="px-6 py-4 text-right">Actions</th>
+                 </tr>
+               </thead>
+               <tbody className="divide-y divide-slate-100">
+                 {filteredResources.length === 0 ? (
+                   <tr>
+                     <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
+                       No resources found matching your search.
+                     </td>
+                   </tr>
+                 ) : (
+                   filteredResources.map((res) => {
+                     // Helper to get nice names
+                     const subName = CURRICULUM[res.classLevel]?.subjects.find(s => s.id === res.subjectId)?.name || res.subjectId;
+                     const topName = CURRICULUM[res.classLevel]?.topics[res.subjectId]?.find(t => t.id === res.topicId)?.name || res.topicId;
+                     
+                     return (
+                       <tr key={res.id} className="hover:bg-slate-50 transition-colors">
+                         <td className="px-6 py-4 font-medium text-slate-900">
+                           <div className="flex items-center gap-3">
+                              {res.category === 'notes' && <FileText className="h-4 w-4 text-blue-500" />}
+                              {res.category === 'pyq' && <Clock className="h-4 w-4 text-orange-500" />}
+                              {(res.category === 'video' || res.category === 'link') && <ExternalLink className="h-4 w-4 text-purple-500" />}
+                              {res.category === 'pdf' && <File className="h-4 w-4 text-red-500" />}
+                              {res.category === 'image' && <ImageIcon className="h-4 w-4 text-green-500" />}
+                              {res.title}
+                           </div>
+                         </td>
+                         <td className="px-6 py-4">
+                           <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium uppercase ${
+                             res.category === 'notes' ? 'bg-blue-50 text-blue-700' :
+                             res.category === 'pyq' ? 'bg-orange-50 text-orange-700' :
+                             res.category === 'pdf' ? 'bg-red-50 text-red-700' :
+                             res.category === 'image' ? 'bg-green-50 text-green-700' :
+                             'bg-purple-50 text-purple-700'
+                           }`}>
+                             {res.category}
+                           </span>
+                         </td>
+                         <td className="px-6 py-4 text-slate-500">
+                           <div className="flex items-center gap-1 text-xs">
+                             <span className="font-semibold text-slate-700">{res.classLevel}</span>
+                             <ChevronRight size={12} />
+                             <span>{subName}</span>
+                             <ChevronRight size={12} />
+                             <span className="truncate max-w-[150px]" title={topName}>{topName}</span>
+                           </div>
+                         </td>
+                         <td className="px-6 py-4 text-slate-500">
+                           {new Date(res.timestamp).toLocaleDateString()}
+                         </td>
+                         <td className="px-6 py-4 text-right">
+                           <div className="flex items-center justify-end gap-2">
+                             <button 
+                               onClick={() => navigateToResource(res)}
+                               className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-all"
+                               title="View Resource"
+                             >
+                               <Eye size={16} />
+                             </button>
+                             <button 
+                               onClick={() => handleDeleteResource(res.id)}
+                               className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-all"
+                               title="Delete Resource"
+                             >
+                               <Trash2 size={16} />
+                             </button>
+                           </div>
+                         </td>
+                       </tr>
+                     );
+                   })
+                 )}
+               </tbody>
+             </table>
+           </div>
+        </div>
+      </div>
+    );
+  };
 
   // 1. Class Selection
   const ClassSelectionView = () => (
@@ -906,13 +1109,25 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50">
-      <Navbar onHome={resetToHome} isAdmin={isAdmin} onToggleAdmin={() => setIsAdmin(!isAdmin)} />
+      <Navbar 
+        onHome={resetToHome} 
+        isAdmin={isAdmin} 
+        onToggleAdmin={() => setIsAdmin(!isAdmin)} 
+        onDashboard={() => setViewMode('dashboard')}
+        isDashboardActive={viewMode === 'dashboard'}
+      />
       
       <main className="flex-grow">
-        {!selectedClass && <ClassSelectionView />}
-        {selectedClass && !selectedSubject && <SubjectSelectionView />}
-        {selectedClass && selectedSubject && !selectedTopic && <TopicSelectionView />}
-        {selectedClass && selectedSubject && selectedTopic && <ContentView />}
+        {viewMode === 'dashboard' ? (
+          <AdminDashboard />
+        ) : (
+          <>
+            {!selectedClass && <ClassSelectionView />}
+            {selectedClass && !selectedSubject && <SubjectSelectionView />}
+            {selectedClass && selectedSubject && !selectedTopic && <TopicSelectionView />}
+            {selectedClass && selectedSubject && selectedTopic && <ContentView />}
+          </>
+        )}
       </main>
 
       <UploadModal />
